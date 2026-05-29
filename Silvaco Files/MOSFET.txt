@@ -1,0 +1,292 @@
+go atlas
+
+# ============================================================
+# 1. MESH
+# ============================================================
+mesh space.mult=2.0
+
+# Total width is 1.4um. Channel runs from 0.2um to 1.2um (Length = 1.0um)
+x.mesh loc=0.0  spac=0.02
+x.mesh loc=0.2  spac=0.005
+x.mesh loc=1.2  spac=0.005
+x.mesh loc=1.4  spac=0.02
+
+# Y-mesh
+y.mesh loc=-0.02 spac=0.005
+y.mesh loc=0.0   spac=0.002
+y.mesh loc=0.1   spac=0.01
+y.mesh loc=0.3   spac=0.05
+
+# ============================================================
+# 2. REGIONS
+# ============================================================
+region num=1 material=silicon y.min=0.0   y.max=0.3
+region num=2 material=sio2    y.min=-0.02 y.max=0.0  x.min=0.2 x.max=1.2
+region num=3 material=vacuum  y.min=-0.02 y.max=0.0  x.min=0.0 x.max=0.2
+region num=4 material=vacuum  y.min=-0.02 y.max=0.0  x.min=1.2 x.max=1.4
+
+# ============================================================
+# 3. ELECTRODES
+# ============================================================
+electrode num=1 name=source    x.min=0.0  x.max=0.2 y.min=0.0 y.max=0.0
+electrode num=2 name=drain     x.min=1.2  x.max=1.4 y.min=0.0 y.max=0.0
+electrode num=3 name=gate      x.min=0.2  x.max=1.2 y.min=-0.02 y.max=-0.02
+electrode num=4 name=substrate bottom
+
+# ============================================================
+# 4. DOPING
+# ============================================================
+doping p.type conc=1e16 uniform
+
+# Source and Drain implants aligned perfectly with the contact regions
+doping n.type conc=1e20 x.left=0.0 x.right=0.2 y.top=0.0 y.bottom=0.1 uniform
+doping n.type conc=1e20 x.left=1.2 x.right=1.4 y.top=0.0 y.bottom=0.1 uniform
+
+# ============================================================
+# 5. OUTPUT QUANTITIES, MODELS, AND SOLVER
+# ============================================================
+output con.band val.band band.param e.field u.srh recomb traps
+
+models cvt srh print
+method newton
+
+solve init
+save outf=MOSFET_Initial_Structure.str
+
+# ============================================================
+# 6. 2D STRUCTURE MAPS
+# ============================================================
+
+# OFF state — VG=0V (below threshold), VD=0.1V
+solve init
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+solve vgate=0.0
+save outf=MOSFET_OFF_State_2D.str
+
+# ON state — VG=2V, VD=1V
+solve init
+solve vgate=0.0 vstep=0.5 vfinal=2.0 name=gate
+solve vdrain=0.0 vstep=0.5 vfinal=1.0 name=drain
+save outf=MOSFET_ON_State_2D.str
+
+# ============================================================
+# 7. TRANSFER CHARACTERISTICS (Id vs Vg)
+# ============================================================
+
+# Vd = 0.1V (used for Vth, SS, KP, ION/IOFF extraction)
+solve init
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+log outf=Transfer_Vd_0.1V.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+
+# Vd = 1.0V
+solve init
+solve vdrain=0.0 vstep=0.25 vfinal=1.0 name=drain
+log outf=Transfer_Vd_1.0V.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+
+# Vd = 2.0V
+solve init
+solve vdrain=0.0 vstep=0.25 vfinal=2.0 name=drain
+log outf=Transfer_Vd_2.0V.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+
+# Vd = 3.0V
+solve init
+solve vdrain=0.0 vstep=0.5 vfinal=3.0 name=drain
+log outf=Transfer_Vd_3.0V.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+
+# ============================================================
+# 8. DC SPICE PARAMETER EXTRACTION
+# ============================================================
+extract init inf="Transfer_Vd_0.1V.log"
+
+# --- Threshold Voltage VTO ---
+# Linear extrapolation at point of maximum transconductance.
+# VD/2 correction applied for finite drain bias.
+extract name="VTO" xintercept(maxslope(curve(v."gate", i."drain"))) - 0.5*0.1
+
+# --- Transconductance Parameter KP = un*Cox (geometry-independent) ---
+# W=1um, L=1um -> W/L = 1. KP = gm / (VD * W/L)
+# gm extracted at Vg=2V where device is well in linear region at Vd=0.1V
+extract name="gm_lin" grad from curve(v."gate", i."drain") where x.val=2.0
+extract name="KP" $"gm_lin" / (0.1 * 1.0)
+
+# --- Subthreshold Swing SS (mV/decade) ---
+
+extract name="Id_ss1" y.val from curve(v."gate", abs(i."drain")) where x.val=0.1
+extract name="Id_ss2" y.val from curve(v."gate", abs(i."drain")) where x.val=0.5
+extract name="SS" (0.5 - 0.1) / (log10($"Id_ss2") - log10($"Id_ss1")) * 1000
+
+# --- ION / IOFF Ratio ---
+extract name="ION"  y.val from curve(v."gate", abs(i."drain")) where x.val=5.0
+extract name="IOFF" y.val from curve(v."gate", abs(i."drain")) where x.val=0.0
+extract name="ION_IOFF_ratio" $"ION" / $"IOFF"
+
+# ============================================================
+# 9. OUTPUT CHARACTERISTICS (Id vs Vd)
+# ============================================================
+
+# Vg = 0.5V (below threshold — fine steps near Vd=0 for convergence)
+solve init
+solve vgate=0.0 vstep=0.25 vfinal=0.5 name=gate
+log outf=Output_Vg_0.5V.log
+solve vdrain=0.0 vstep=0.01 vfinal=0.5 name=drain
+solve vdrain=0.5 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# Vg = 1.0V
+solve init
+solve vgate=0.0 vstep=0.25 vfinal=1.0 name=gate
+log outf=Output_Vg_1.0V.log
+solve vdrain=0.0 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# Vg = 1.5V
+solve init
+solve vgate=0.0 vstep=0.25 vfinal=1.5 name=gate
+log outf=Output_Vg_1.5V.log
+solve vdrain=0.0 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# Vg = 2.0V
+solve init
+solve vgate=0.0 vstep=0.5 vfinal=2.0 name=gate
+log outf=Output_Vg_2.0V.log
+solve vdrain=0.0 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# Vg = 2.5V
+solve init
+solve vgate=0.0 vstep=0.5 vfinal=2.5 name=gate
+log outf=Output_Vg_2.5V.log
+solve vdrain=0.0 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# Vg = 3.0V
+solve init
+solve vgate=0.0 vstep=0.5 vfinal=3.0 name=gate
+log outf=Output_Vg_3.0V.log
+solve vdrain=0.0 vstep=0.05 vfinal=5.0 name=drain
+log off
+
+# ============================================================
+# 10. CHANNEL LENGTH MODULATION EXTRACTION
+# ============================================================
+extract init inf="Output_Vg_3.0V.log"
+extract name="Id_sat_3V" y.val from curve(v."drain", i."drain") where x.val=3.0
+extract name="Id_sat_4V" y.val from curve(v."drain", i."drain") where x.val=4.0
+
+extract name="LAMBDA" ($"Id_sat_4V" - $"Id_sat_3V") / (1.0 * $"Id_sat_3V")
+extract name="gds"    ($"Id_sat_4V" - $"Id_sat_3V") / (4.0 - 3.0)
+extract name="ro"     1.0 / $"gds"
+
+# ============================================================
+# 11. BODY EFFECT (Vth vs VBS)
+# ============================================================
+
+# VBS = 0V
+extract init inf="Transfer_Vd_0.1V.log"
+extract name="VTO_VBS_0" xintercept(maxslope(curve(v."gate", i."drain"))) - 0.5*0.1
+
+# VBS = -1V
+solve init
+solve vsubstrate=0.0 vstep=-0.25 vfinal=-1.0 name=substrate
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+log outf=Transfer_VBS_neg1.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+extract init inf="Transfer_VBS_neg1.log"
+extract name="VTO_VBS_neg1" xintercept(maxslope(curve(v."gate", i."drain"))) - 0.5*0.1
+
+# VBS = -2V
+solve init
+solve vsubstrate=0.0 vstep=-0.5 vfinal=-2.0 name=substrate
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+log outf=Transfer_VBS_neg2.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+extract init inf="Transfer_VBS_neg2.log"
+extract name="VTO_VBS_neg2" xintercept(maxslope(curve(v."gate", i."drain"))) - 0.5*0.1
+
+# VBS = -3V
+solve init
+solve vsubstrate=0.0 vstep=-0.5 vfinal=-3.0 name=substrate
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+log outf=Transfer_VBS_neg3.log
+solve vgate=0.0 vstep=0.05 vfinal=5.0 name=gate
+log off
+extract init inf="Transfer_VBS_neg3.log"
+extract name="VTO_VBS_neg3" xintercept(maxslope(curve(v."gate", i."drain"))) - 0.5*0.1
+
+# PHI = 2*phi_F = 2*(kT/q)*ln(NA/ni)
+# kT/q = 0.0259V at 300K, ni = 1.5e10 cm^-3 for silicon
+extract name="PHI" 2.0 * 0.0259 * log(1e16 / 1.5e10)
+
+# GAMMA extracted for each VBS point then averaged
+extract name="GAMMA_1" ($"VTO_VBS_neg1" - $"VTO_VBS_0") / (sqrt($"PHI"+1.0) - sqrt($"PHI"))
+extract name="GAMMA_2" ($"VTO_VBS_neg2" - $"VTO_VBS_0") / (sqrt($"PHI"+2.0) - sqrt($"PHI"))
+extract name="GAMMA_3" ($"VTO_VBS_neg3" - $"VTO_VBS_0") / (sqrt($"PHI"+3.0) - sqrt($"PHI"))
+extract name="GAMMA"   ($"GAMMA_1" + $"GAMMA_2" + $"GAMMA_3") / 3.0
+
+# ============================================================
+# 12. SMALL-SIGNAL AC SIMULATION
+# ============================================================
+
+# Single operating point: Vg=2V, Vd=2V, f=1MHz
+solve init
+solve vgate=0.0 vstep=0.5 vfinal=2.0 name=gate
+solve vdrain=0.0 vstep=0.5 vfinal=2.0 name=drain
+log outf=AC_Capacitance_Vg2_Vd2.log
+solve ac freq=1e6
+log off
+
+# Cgg vs Vg sweep at Vd=0.1V, f=1MHz
+solve init
+solve vdrain=0.0 vstep=0.05 vfinal=0.1 name=drain
+log outf=AC_Cgg_vs_Vg.log
+solve vgate=0.0 vstep=0.1 vfinal=5.0 name=gate ac freq=1e6
+log off
+
+# ============================================================
+# 13. SMALL-SIGNAL PARAMETER EXTRACTION
+# ============================================================
+
+# Transconductance gm at Vg=2V, Vd=2V
+extract init inf="Transfer_Vd_2.0V.log"
+extract name="gm_at_Vg2" grad from curve(v."gate", i."drain") where x.val=2.0
+
+# Output conductance gds at Vd=2.5V, Vg=3V
+extract init inf="Output_Vg_3.0V.log"
+extract name="gds_ac" grad from curve(v."drain", i."drain") where x.val=2.5
+
+# Intrinsic capacitances at operating point Vg=2V, Vd=2V
+extract init inf="AC_Capacitance_Vg2_Vd2.log"
+extract name="Cgs" y.val from curve(v."gate", abs(c."gate""source")) where x.val=2.0
+extract name="Cgd" y.val from curve(v."gate", abs(c."gate""drain"))  where x.val=2.0
+
+# Unity-gain frequency fT = gm / (2*pi*(Cgs+Cgd))
+extract name="fT" $"gm_at_Vg2" / (2.0 * 3.14159 * ($"Cgs" + $"Cgd"))
+
+# ============================================================
+# 14. TONYPLOT
+# ============================================================
+
+tonyplot MOSFET_Initial_Structure.str
+tonyplot MOSFET_OFF_State_2D.str
+tonyplot MOSFET_ON_State_2D.str
+
+tonyplot -overlay Transfer_Vd_0.1V.log Transfer_Vd_1.0V.log Transfer_Vd_2.0V.log Transfer_Vd_3.0V.log
+
+tonyplot -overlay Output_Vg_0.5V.log Output_Vg_1.0V.log Output_Vg_1.5V.log Output_Vg_2.0V.log Output_Vg_2.5V.log Output_Vg_3.0V.log
+
+tonyplot -overlay Transfer_Vd_0.1V.log Transfer_VBS_neg1.log Transfer_VBS_neg2.log Transfer_VBS_neg3.log
+
+tonyplot AC_Cgg_vs_Vg.log
+
+quit
