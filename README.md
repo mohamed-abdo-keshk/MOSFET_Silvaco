@@ -27,7 +27,6 @@ Key Results
 Software Requirements
 * Silvaco Atlas TCAD
 * Silvaco TonyPlot
-* nanoHUB Platform
 
 Key Findings
 The simulation successfully modeled the fundamental solid-state physics of an N-channel MOSFET, enabling the direct and derived extraction of SPICE Level-1 model parameters. The analysis highlighted real-world device behaviors that diverge from ideal analytical models, demonstrating that effective surface mobility is significantly reduced due to interface scattering, and that 2D lateral fringing fields effectively increase the body effect coefficient beyond 1D estimations.
